@@ -12,6 +12,7 @@ import './visual-3d';
 
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
+  // ===== States =====
   @state() isRecording = false;
   @state() isPaused = false;
   @state() status = '';
@@ -19,12 +20,13 @@ export class GdmLiveAudio extends LitElement {
   @state() currentOutputTranscription = '';
   @state() displayedLinks: string[] = [];
 
-  // UI de texto e imagens
+  // Entrada do usuário
   @state() textInput = '';
   @state() imagePreviews: string[] = []; // dataURL para preview
   private pendingFiles: File[] = [];
   @state() isSending = false;
 
+  // ===== Audio / Session =====
   private client!: GoogleGenAI;
   private sessionPromise!: Promise<Session>;
 
@@ -41,136 +43,189 @@ export class GdmLiveAudio extends LitElement {
   private scriptProcessorNode: ScriptProcessorNode | null = null;
   private sources = new Set<AudioBufferSourceNode>();
 
+  // ===== Styles (minimal, ChatGPT-like) =====
   static styles = css`
+    :host {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Caixa de links úteis (respostas com URLs) */
     .links-box {
-      position: absolute;
-      bottom: calc(10vh + 230px);
+      position: fixed;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 10;
-      background: rgba(20, 20, 30, 0.85);
+      bottom: calc(18vh + 200px);
+      z-index: 30;
+      background: rgba(18, 18, 24, 0.9);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 12px;
-      padding: 15px 20px;
-      font-family: sans-serif;
-      color: white;
-      width: 90%;
-      max-width: 520px;
-      text-align: center;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      padding: 12px 14px;
+      color: #fff;
+      width: min(640px, 92%);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
     .links-box h3 {
-      margin: 0 0 10px 0;
-      font-size: 18px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-      padding-bottom: 8px;
+      margin: 0 0 6px 0;
+      font-size: 14px;
+      font-weight: 600;
+      opacity: .9;
+      border-bottom: 1px dashed rgba(255,255,255,.15);
+      padding-bottom: 6px;
     }
-    .links-box a {
+    .links-list {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .links-list a {
       display: inline-block;
-      color: #90c8ff;
-      text-decoration: none;
-      font-size: 15px;
-      margin: 4px 8px;
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, 0.08);
+      color: #9cc3ff;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.08);
       border-radius: 8px;
+      padding: 6px 10px;
+      text-decoration: none;
+      font-size: 13px;
     }
-    .links-box a:hover { background: rgba(144, 200, 255, 0.25); color: #ffffff; }
+    .links-list a:hover { background: rgba(156,195,255,.18); color: #fff; }
 
-    #status {
-      position: absolute;
-      bottom: 5vh;
-      left: 0; right: 0;
-      z-index: 10;
-      text-align: center;
+    /* Barra de entrada (tipo ChatGPT) */
+    .composer {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 18vh; /* acima dos controles de microfone */
+      z-index: 40;
+      width: min(780px, 92%);
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .textarea-wrap {
+      background: rgba(22,22,28,.9);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px;
+      padding: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      box-shadow: 0 8px 20px rgba(0,0,0,.25);
+    }
+
+    textarea.input {
+      width: 100%;
+      max-height: 140px;
+      min-height: 44px;
+      resize: none;
+      border: none;
+      outline: none;
+      background: transparent;
       color: #fff;
+      font-size: 15px;
+      line-height: 1.35;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
 
-    /* Controles (rec, stop, pause) */
-    .controls {
-      z-index: 10;
-      position: absolute;
-      bottom: 10vh;
-      left: 0; right: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .controls button {
-      outline: none;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      color: white;
+    .icon-btn, .send-btn {
+      height: 44px;
       border-radius: 12px;
-      background: rgba(255, 255, 255, 0.1);
-      width: 64px; height: 64px;
-      cursor: pointer;
-      font-size: 24px;
-      padding: 0; margin: 0;
-    }
-    .controls button:hover { background: rgba(255, 255, 255, 0.2); }
-    .controls button[disabled] { display: none; }
-
-    /* Barra de entrada (texto + upload) */
-    .input-bar {
-      position: absolute;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: calc(10vh + 90px);
-      display: flex;
-      gap: 8px;
-      width: 92%;
-      max-width: 620px;
-      z-index: 10;
-      align-items: center;
-    }
-    .input-bar input[type="text"] {
-      flex: 1;
-      padding: 12px 14px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(20,20,30,0.85);
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.08);
       color: #fff;
-      outline: none;
-      font-size: 15px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: .15s ease;
     }
-    .input-bar input[type="file"] { display: none; }
     .icon-btn {
-      width: 44px; height: 44px;
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(255,255,255,0.1);
-      color: #fff; font-size: 20px; cursor: pointer;
+      width: 46px;
+      display: grid; place-items: center;
+      font-size: 18px;
     }
+    .icon-btn:hover { background: rgba(255,255,255,.18); }
+
     .send-btn {
-      padding: 0 16px; height: 44px;
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: #2f70ff; color: #fff; font-weight: 600; cursor: pointer;
+      padding: 0 14px;
+      background: #2f70ff;
+      border-color: rgba(47,112,255,.9);
     }
+    .send-btn:hover { filter: brightness(1.05); }
     .send-btn[disabled] { opacity: .6; cursor: not-allowed; }
 
+    .hidden-input { display: none; }
+
+    /* Previews miniaturas */
     .previews {
-      position: absolute;
+      position: fixed;
       left: 50%;
       transform: translateX(-50%);
-      bottom: calc(10vh + 150px);
-      display: flex;
-      gap: 6px;
-      width: 92%;
-      max-width: 620px;
-      z-index: 10;
-      flex-wrap: wrap;
+      bottom: calc(18vh + 60px);
+      z-index: 35;
+      display: flex; gap: 8px; flex-wrap: wrap;
+      width: min(780px, 92%);
     }
     .thumb {
-      width: 56px; height: 56px;
-      border-radius: 8px; overflow: hidden;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(255,255,255,0.06);
+      width: 56px; height: 56px; border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
     }
     .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    /* Controles do mic (centralizados abaixo) */
+    .controls {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 8vh;
+      z-index: 20;
+      display: flex; gap: 10px;
+      align-items: center; justify-content: center;
+    }
+    .circle {
+      width: 60px; height: 60px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.08);
+      color: #fff;
+      font-size: 24px;
+      display: grid; place-items: center;
+      cursor: pointer;
+      transition: .15s ease;
+    }
+    .circle:hover { background: rgba(255,255,255,.18); }
+    .circle[disabled] { opacity: .4; cursor: not-allowed; }
+
+    #status {
+      position: fixed;
+      bottom: 3.5vh;
+      left: 0; right: 0;
+      z-index: 10;
+      text-align: center;
+      color: #fff;
+      font-size: 13px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      opacity: .9;
+      padding: 0 10px;
+    }
+
+    /* Responsivo */
+    @media (max-width: 768px) {
+      .links-box { bottom: calc(22vh + 200px); }
+      .composer { bottom: 22vh; grid-template-columns: 1fr auto auto; }
+      .controls { bottom: 11vh; }
+      #status { bottom: 5vh; font-size: 12px; }
+      .circle { width: 54px; height: 54px; font-size: 22px; }
+      .icon-btn { width: 44px; }
+    }
+    @media (max-width: 420px) {
+      .composer { width: min(96%, 560px); }
+      .previews { width: min(96%, 560px); bottom: calc(22vh + 56px); }
+      .links-box { width: min(96%, 560px); }
+      textarea.input { font-size: 14px; }
+    }
   `;
 
   constructor() {
@@ -178,6 +233,7 @@ export class GdmLiveAudio extends LitElement {
     this.initClient();
   }
 
+  // ===== Init =====
   private initAudio() {
     this.nextStartTime = this.outputAudioContext.currentTime;
   }
@@ -185,7 +241,7 @@ export class GdmLiveAudio extends LitElement {
   private async initClient() {
     this.initAudio();
     try {
-      // ====== API KEY INSERIDA DIRETAMENTE ======
+      // ===== SUA API KEY (inserida diretamente) =====
       const apiKey = "AIzaSyD3y3ZZ05zMSH3o_73gfcN7rmcgBhEphNE";
 
       this.client = new GoogleGenAI({ apiKey });
@@ -207,6 +263,7 @@ export class GdmLiveAudio extends LitElement {
           onopen: () => this.updateStatus('Opened'),
           onmessage: async (message: LiveServerMessage) => {
             const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
+
             if (audio) {
               this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(
@@ -245,90 +302,55 @@ export class GdmLiveAudio extends LitElement {
           responseModalities: [Modality.AUDIO],
           outputAudioTranscription: {},
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-          // ====== PROMPT DO AMPERITO ATUALIZADO ======
+          // ===== System prompt — entender primeiro, responder depois =====
           systemInstruction: `
 Você é o **Amperito**, assistente virtual oficial da **EFALL**.
+Regra de ouro: **sempre entender a demanda primeiro** (faça ao menos 1 pergunta objetiva quando houver dúvida) e **só então responder/encaminhar**. Fale sempre por voz. Seja simples, direto e humano.
 
-## 1️⃣ IDENTIDADE E TOM
-- Estilo simpático, direto e profissional.
-- Frases curtas (máx. 2 linhas).
-- Linguagem consultiva e humana.
-- Sempre perguntar antes de oferecer.
-- Nunca inventar informações.
-- Nunca encerrar por conta própria.
-- Sempre responder por voz.
-- Foco: entender, orientar e direcionar.
-- Valorizar os 9 anos de história da EFALL, construída com honestidade, inovação e confiança em cada relação.
+## Identidade e Tom
+- Frases curtas (até 2 linhas). Simpático, consultivo e profissional.
+- Nunca inventar informações. Nunca encerrar por conta.
+- Se a pergunta for ambígua/incompleta: peça esclarecimento antes de responder.
 
-## 2️⃣ FUNÇÃO
-Sou o Amperito, assistente virtual da EFALL.
-Atendo em três frentes:
-⚡ Materiais Elétricos
-🧱 Materiais de Construção
-🔆 Energia Solar (Efall Engenharia)
+## Função
+Atender três frentes: ⚡ Materiais Elétricos | 🧱 Materiais de Construção | 🔆 Energia Solar (Efall Engenharia).
+Entender o que o cliente precisa, orientar com base em estoque real e direcionar ao WhatsApp correto.
 
-Meu papel é entender a necessidade do cliente, oferecer orientação técnica com base em estoque real e direcionar para o setor correto via WhatsApp.
-
-## 3️⃣ FLUXO DE ATENDIMENTO
-
-### 🟢 ABERTURA
+## Abertura
 “Olá! Eu sou o Amperito, assistente virtual da EFALL. Como posso te ajudar hoje? ⚡😊”
-Se o cliente não especificar o assunto, perguntar:
-“Seu interesse é em energia solar, materiais elétricos ou materiais de construção?”
+Se o assunto não for claro: “Seu interesse é em energia solar, materiais elétricos ou materiais de construção?”
 
-### 🟡 PERGUNTAS BÁSICAS
+## Perguntas Básicas
 - “Qual seu nome?”
 - “De qual cidade você fala?”
 
-### 🔆 SE FOR ENERGIA SOLAR
+## Rotas
+### Energia Solar
 - “Legal! Qual seu objetivo: economia, backup ou expansão?”
 - “Perfeito! Vou te conectar com nosso especialista.”
 👉 Efall Engenharia – (54) 9976-8875 — https://wa.me/555499768875
-📍 Estr. Antiga Geral Bento – Dois Lajeados/RS
-📬 CEP 99220-000
-✉️ comercial@efall.net
 
-### ⚡ SE FOR MATERIAIS ELÉTRICOS
+### Materiais Elétricos
 - “Certo! Posso te ajudar com informações técnicas e estoque.”
 - “Para finalizar sua compra ou garantir o melhor valor, chame direto pelo link.”
 👉 Efall Materiais Elétricos – (54) 99694-1592 — https://wa.me/5554996941592
-📍 Rua Arthur Schlichting, 198 – Jardim Glória, Bento Gonçalves/RS
-📬 CEP 95701-210
-✉️ comercial1@efall.net
 
-### 🧱 SE FOR MATERIAIS DE CONSTRUÇÃO
+### Materiais de Construção
 - “Perfeito! Temos estoque completo para obras e reformas.”
 - “Para seguir com orçamento, chame direto no link.”
 👉 Efall Materiais de Construção – (54) 3471-1375 — https://wa.me/555434711375
-📍 Rua Thomaz Gonzaga, 556 – Centro, Dois Lajeados/RS
-📬 CEP 99220-000
-✉️ comercial@efall.net
 
-## 4️⃣ HISTÓRICO E POSICIONAMENTO
-Há mais de 9 anos, a EFALL vem transformando a forma como pessoas e empresas se conectam com a energia.
-Com uma trajetória marcada por inovação, segurança e excelência técnica, tornou-se uma das principais referências em energia solar, materiais elétricos e construção do Sul do Brasil.
-Mais do que energia, a EFALL entrega confiança, economia real e futuro sustentável, com equipe própria, projetos personalizados e atendimento próximo.
+## Política de Preços
+Nunca passar valores fechados sem contexto. Explique que varia por tipo/bitola/potência/aplicação.
+Use: “Depende de alguns fatores técnicos. Posso coletar informações para te encaminhar o melhor valor?”
 
-## 5️⃣ POLÍTICA DE PREÇOS
-- Nunca informar valores fixos.
-- Explicar que os preços variam conforme tipo, bitola, potência ou aplicação.
-- Dizer: “Depende de alguns fatores técnicos. Posso coletar informações para te encaminhar o melhor valor com meu colega humano?”
+## Objeções
+- Preço / caro: “Entendo. Nosso foco é economia real e segurança. Quer que eu peça uma avaliação?”
+- Quer falar com alguém: “Claro, vou te direcionar agora. Clique no link na tela.”
 
-## 6️⃣ OBJEÇÕES COMUNS
-🪙 Preço: “Depende de diagnóstico. Posso coletar alguns dados para te encaminhar o melhor valor?”
-💰 Está caro: “Entendo. Nosso foco é economia real e segurança. Quer que eu peça uma avaliação pra você?”
-🗣️ Quer falar com alguém: “Claro, vou te direcionar agora. Clique no link na tela.”
-🏢 Quer cotar com outras empresas: “Aqui você encontra tudo em um só lugar, com estoque completo e suporte técnico real.”
-😤 Cliente nervoso: “Compreendo, vamos resolver isso juntos. A EFALL sempre busca soluções seguras e rápidas.”
-
-## 7️⃣ VALORES E PROPÓSITO
-🌱 Missão: Fornecer soluções completas que unem qualidade, tecnologia e confiança, transformando obras, impulsionando negócios e tornando a energia mais acessível e segura.
-⚡ Visão: Ser referência no Sul do Brasil em energia solar, materiais elétricos e construção, reconhecida pela inovação, atendimento especializado e crescimento sustentável.
-💎 Valores: Honestidade, sustentabilidade, valorização das pessoas e compromisso com a eficiência energética.
-
-## 8️⃣ DIFERENCIAL HISTÓRICO
-“Mais do que uma empresa, a EFALL é um ecossistema de energia, engenharia e construção que nasceu para conectar pessoas, negócios e o futuro.
-EFALL. Energia que nos conecta.”`,
+## Fechamento
+Sempre manter a conversa aberta e confirmar se a orientação ajudou.
+          `,
         },
       });
     } catch (e) {
@@ -337,7 +359,7 @@ EFALL. Energia que nos conecta.”`,
     }
   }
 
-  // Ajusta nomes amigáveis conforme os novos números
+  // ===== Helpers =====
   private getLinkName(link: string): string {
     if (link.includes('555499768875')) return 'Especialista Solar';
     if (link.includes('5554996941592')) return 'Materiais Elétricos';
@@ -353,7 +375,7 @@ EFALL. Energia que nos conecta.”`,
   private updateStatus(msg: string) { this.status = msg; }
   private updateError(msg: string) { this.error = msg; }
 
-  // ======= AUDIO (FALA DO USUÁRIO) =======
+  // ===== Mic control =====
   private async startRecording() {
     if (this.isRecording) return;
 
@@ -372,8 +394,7 @@ EFALL. Energia que nos conecta.”`,
 
       this.scriptProcessorNode.onaudioprocess = (ev) => {
         if (!this.isRecording || this.isPaused) return;
-        const inputBuffer = ev.inputBuffer;
-        const pcmData = inputBuffer.getChannelData(0);
+        const pcmData = ev.inputBuffer.getChannelData(0);
         this.sessionPromise
           .then((session) => session.sendRealtimeInput({ media: createBlob(pcmData) }))
           .catch((err) => this.updateError(String(err)));
@@ -384,7 +405,7 @@ EFALL. Energia que nos conecta.”`,
 
       this.isRecording = true;
       this.isPaused = false;
-      this.updateStatus('🔴 Recording... Capturing PCM chunks.');
+      this.updateStatus('🔴 Gravando… Capturando áudio.');
     } catch (err: any) {
       console.error('Error starting recording:', err);
       this.updateStatus(`Error: ${err?.message ?? err}`);
@@ -397,7 +418,7 @@ EFALL. Energia que nos conecta.”`,
     try { this.mediaStream?.getAudioTracks().forEach((t) => (t.enabled = false)); } catch {}
     try { await this.sessionPromise.then((s) => s.sendRealtimeInput({ turnComplete: {} })); } catch {}
     this.isPaused = true;
-    this.updateStatus('⏸️ Pausado. Processando resposta...');
+    this.updateStatus('⏸️ Pausado. Processando resposta…');
   }
 
   private async resumeListening() {
@@ -435,24 +456,35 @@ EFALL. Energia que nos conecta.”`,
     this.updateStatus('Session cleared.');
   }
 
-  // ======= TEXTO + IMAGENS =======
-  private onTextChange(e: Event) {
-    this.textInput = (e.target as HTMLInputElement).value;
+  // ===== Text & Images =====
+  private autoResize(el: HTMLTextAreaElement) {
+    el.style.height = '0px';
+    el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+  }
+
+  private onTextInput(e: Event) {
+    const el = e.target as HTMLTextAreaElement;
+    this.textInput = el.value;
+    this.autoResize(el);
+  }
+
+  private onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      this.sendTextAndImages();
+    }
   }
 
   private async onFileChange(e: Event) {
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
 
-    // Guarda arquivos e gera previews
     const files = Array.from(input.files).filter((f) => f.type.startsWith('image/'));
     this.pendingFiles.push(...files);
     for (const f of files) {
       const dataUrl = await this.fileToDataURL(f);
       this.imagePreviews = [...this.imagePreviews, dataUrl];
     }
-
-    // limpa o input para permitir re-seleção igual
     input.value = '';
   }
 
@@ -466,12 +498,11 @@ EFALL. Energia que nos conecta.”`,
   }
 
   private async fileToBase64AndType(file: File): Promise<{ mimeType: string; data: string }> {
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
-    return { mimeType: file.type || 'image/png', data: base64 };
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+    return { mimeType: file.type || 'image/png', data: btoa(bin) };
   }
 
   private async sendTextAndImages() {
@@ -482,18 +513,12 @@ EFALL. Energia que nos conecta.”`,
 
     this.isSending = true;
 
-    // Pausa o mic (se estiver gravando) para o modelo responder sem sobrepor
-    if (this.isRecording && !this.isPaused) {
-      await this.pauseListening().catch(() => {});
-    }
+    // Pausa o mic para não sobrepor
+    if (this.isRecording && !this.isPaused) { await this.pauseListening().catch(() => {}); }
 
     try {
       const parts: any[] = [];
-
-      if (hasText) {
-        parts.push({ text: this.textInput.trim() });
-      }
-
+      if (hasText) parts.push({ text: this.textInput.trim() });
       if (hasImgs) {
         for (const f of this.pendingFiles) {
           const { mimeType, data } = await this.fileToBase64AndType(f);
@@ -502,12 +527,7 @@ EFALL. Energia que nos conecta.”`,
       }
 
       await this.sessionPromise.then((s) => {
-        // Envia conteúdo do cliente (texto + imagens)
-        (s as any).send?.({
-          clientContent: { parts },
-        });
-
-        // Fecha o turno para forçar a resposta imediata
+        (s as any).send?.({ clientContent: { parts } });
         s.sendRealtimeInput({ turnComplete: {} });
       });
 
@@ -515,6 +535,11 @@ EFALL. Energia que nos conecta.”`,
       this.textInput = '';
       this.pendingFiles = [];
       this.imagePreviews = [];
+
+      // reseta altura do textarea
+      const ta = this.renderRoot?.querySelector('textarea.input') as HTMLTextAreaElement | null;
+      if (ta) { ta.value = ''; this.autoResize(ta); }
+
       this.updateStatus('Mensagem enviada. Aguardando resposta…');
     } catch (e: any) {
       console.error(e);
@@ -524,62 +549,61 @@ EFALL. Energia que nos conecta.”`,
     }
   }
 
+  // ===== Render =====
   render() {
     return html`
       <div>
-        ${this.displayedLinks.length
-          ? html`
-              <div class="links-box">
-                <h3>Links úteis</h3>
-                ${this.displayedLinks.map(
-                  (l) => html`<a href=${l} target="_blank" rel="noreferrer">${this.getLinkName(l)}</a>`
-                )}
-              </div>
-            `
-          : null}
+        ${this.displayedLinks.length ? html`
+          <div class="links-box">
+            <h3>Links úteis</h3>
+            <div class="links-list">
+              ${this.displayedLinks.map(
+                (l) => html`<a href=${l} target="_blank" rel="noreferrer">${this.getLinkName(l)}</a>`
+              )}
+            </div>
+          </div>
+        ` : null}
 
-        <!-- PREVIEWS DE IMAGEM -->
-        ${this.imagePreviews.length
-          ? html`
-              <div class="previews">
-                ${this.imagePreviews.map((src) => html`<div class="thumb"><img src=${src} alt="preview" /></div>`)}
-              </div>
-            `
-          : null}
+        ${this.imagePreviews.length ? html`
+          <div class="previews">
+            ${this.imagePreviews.map((src) => html`<div class="thumb"><img src=${src} alt="preview" /></div>`)}
+          </div>
+        ` : null}
 
-        <!-- BARRA DE TEXTO + UPLOAD -->
-        <div class="input-bar">
-          <input
-            type="text"
-            placeholder="Descreva sua demanda ou cole um link…"
-            .value=${this.textInput}
-            @input=${this.onTextChange}
-            @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.sendTextAndImages(); }}
-          />
-          <label for="fileUpload" class="icon-btn" title="Enviar fotos">🖼️</label>
-          <input id="fileUpload" type="file" accept="image/*" multiple @change=${this.onFileChange} />
+        <!-- Composer (ChatGPT-like) -->
+        <div class="composer" role="form" aria-label="Enviar mensagem e imagens">
+          <div class="textarea-wrap">
+            <textarea
+              class="input"
+              placeholder="Descreva sua demanda (Shift+Enter quebra linha)…"
+              .value=${this.textInput}
+              @input=${this.onTextInput}
+              @keydown=${this.onKeyDown}
+              rows="1"
+            ></textarea>
+          </div>
+
+          <label class="icon-btn" for="fileUpload" title="Enviar foto (📷)">
+            📷
+          </label>
+          <input id="fileUpload" class="hidden-input" type="file" accept="image/*" multiple @change=${this.onFileChange} />
+
           <button class="send-btn" @click=${this.sendTextAndImages} ?disabled=${this.isSending}>Enviar</button>
         </div>
 
-        <!-- CONTROLES DE ÁUDIO -->
-        <div class="controls">
-          <button id="resetButton" @click=${this.reset} ?disabled=${this.isRecording} title="Reset">🔄</button>
-
-          <button id="startButton" @click=${this.startRecording} ?disabled=${this.isRecording} title="Start">🔴</button>
-
-          ${this.isRecording
-            ? html`
-                <button
-                  id="pauseResumeButton"
-                  @click=${this.isPaused ? this.resumeListening : this.pauseListening}
-                  title=${this.isPaused ? 'Resume' : 'Pause & Respond'}
-                >
-                  ${this.isPaused ? '▶️' : '⏸️'}
-                </button>
-              `
-            : null}
-
-          <button id="stopButton" @click=${this.stopRecording} ?disabled=${!this.isRecording} title="Stop">⏹️</button>
+        <!-- Mic controls -->
+        <div class="controls" aria-label="Controles de microfone">
+          <button class="circle" @click=${this.reset} ?disabled=${this.isRecording} title="Reset">🔄</button>
+          <button class="circle" @click=${this.startRecording} ?disabled=${this.isRecording} title="Start">🎙️</button>
+          ${this.isRecording ? html`
+            <button class="circle"
+              @click=${this.isPaused ? this.resumeListening : this.pauseListening}
+              title=${this.isPaused ? 'Retomar' : 'Pausar e Responder'}
+            >
+              ${this.isPaused ? '▶️' : '⏸️'}
+            </button>
+          ` : null}
+          <button class="circle" @click=${this.stopRecording} ?disabled=${!this.isRecording} title="Stop">⏹️</button>
         </div>
 
         <div id="status">${this.error ? `Erro: ${this.error}` : this.status}</div>
