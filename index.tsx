@@ -29,8 +29,8 @@ type PendingMedia = {
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   // ===== States =====
-  @state() isRecording = false;
-  @state() isPaused = false; // quando true: mic travado p/ o Amperito responder
+  @state() isRecording = false;   // mic on/off (sem trava)
+  @state() isPaused = false;      // usado só internamente p/ pausa automática de envio
   @state() status = '';
   @state() error = '';
   @state() currentOutputTranscription = '';
@@ -51,7 +51,7 @@ export class GdmLiveAudio extends LitElement {
   private client!: GoogleGenAI;
   private sessionPromise!: Promise<Session>;
 
-  // Audio contexts (com fallback Safari)
+  // Audio contexts
   private inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
   private outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
@@ -82,29 +82,30 @@ export class GdmLiveAudio extends LitElement {
       left: 50%;
       transform: translateX(-50%);
       top: 20px;
-      bottom: 28vh; /* espaço para previews/composer/controles */
+      bottom: 28vh;
       width: min(860px, 92%);
       overflow-y: auto;
-      padding: 12px 8px 80px;
+      padding: 8px 8px 72px;
       box-sizing: border-box;
     }
     .day-sep {
       text-align: center;
-      margin: 8px 0 12px;
+      margin: 6px 0 10px;
       font-size: 12px;
       opacity: .75;
     }
     .msg {
       display: inline-block;
-      max-width: 76%;
-      margin: 6px 0;
-      padding: 10px 12px;
-      border-radius: 16px;
+      max-width: 78%;
+      margin: 5px 0;
+      padding: 8px 10px;
+      border-radius: 14px;
       line-height: 1.35;
       position: relative;
       box-shadow: 0 6px 20px rgba(0,0,0,.18);
       word-wrap: break-word;
       white-space: pre-wrap;
+      font-size: 14px;
     }
     .msg.user {
       background: #2f70ff;
@@ -120,26 +121,26 @@ export class GdmLiveAudio extends LitElement {
       margin-right: auto;
       border-bottom-left-radius: 6px;
     }
-    .bubble { display: flex; flex-direction: column; gap: 8px; }
+    .bubble { display: flex; flex-direction: column; gap: 6px; }
     .thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
     .thumb {
-      width: 120px; height: 120px; border-radius: 10px; overflow: hidden;
+      width: 110px; height: 110px; border-radius: 10px; overflow: hidden;
       border: 1px solid rgba(255,255,255,.12);
       background: rgba(255,255,255,.06);
     }
     .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .chips { display: flex; gap: 6px; flex-wrap: wrap; }
     .chip {
-      height: 26px; display:inline-flex; align-items:center; gap:6px; padding:0 10px;
+      height: 24px; display:inline-flex; align-items:center; gap:6px; padding:0 8px;
       border-radius:999px; border:1px solid rgba(255,255,255,.12);
       background: rgba(255,255,255,.08); color:#fff; font-size:12px;
     }
-    .ts { font-size: 11px; opacity: .75; margin-top: 2px; align-self: flex-end; }
+    .ts { font-size: 10px; opacity: .75; margin-top: 2px; align-self: flex-end; }
 
     /* Overlay "máquina de escrever" meio apagado */
     .overlay {
       position: fixed;
-      left: 24px; right: 24px; bottom: calc(18vh + 230px);
+      left: 16px; right: 16px; bottom: calc(16vh + 220px);
       z-index: 22;
       display: grid;
       gap: 4px;
@@ -148,69 +149,67 @@ export class GdmLiveAudio extends LitElement {
       opacity: .55;
       color: #cfe0ff;
       text-shadow: 0 1px 0 rgba(0,0,0,.25);
-      max-height: 34vh;
-      overflow: hidden;
+      max-height: 34vh; overflow: hidden;
       mask-image: linear-gradient(to bottom, rgba(0,0,0,1), rgba(0,0,0,.85), rgba(0,0,0,0));
     }
-    .overlay-line { font-size: 13px; letter-spacing: .2px; white-space: pre-wrap; }
+    .overlay-line { font-size: 12px; letter-spacing: .2px; white-space: pre-wrap; }
 
-    /* Caixa de links úteis */
+    /* Links úteis */
     .links-box {
       position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(18vh + 200px); z-index: 30;
+      bottom: calc(16vh + 190px); z-index: 30;
       background: rgba(8,21,51,.85); backdrop-filter: blur(8px);
       border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
-      padding: 12px 14px; color: #fff; width: min(640px, 92%);
+      padding: 10px 12px; color: #fff; width: min(640px, 92%);
     }
-    .links-box h3 { margin: 0 0 6px 0; font-size: 14px; font-weight: 600; opacity:.9; border-bottom: 1px dashed rgba(255,255,255,.15); padding-bottom: 6px; }
+    .links-box h3 { margin: 0 0 6px 0; font-size: 13px; font-weight: 600; opacity:.9; border-bottom: 1px dashed rgba(255,255,255,.15); padding-bottom: 6px; }
     .links-list { display:flex; flex-wrap:wrap; gap:6px; }
     .links-list a {
       display:inline-block; color:#9cc3ff; background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.08); border-radius:8px; padding:6px 10px; text-decoration:none; font-size:13px;
+      border:1px solid rgba(255,255,255,.08); border-radius:8px; padding:5px 8px; text-decoration:none; font-size:12px;
     }
-    .links-list a:hover { background: rgba(156,195,255,.18); color:#fff; }
 
     /* Previews antes de enviar */
     .previews {
       position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(18vh + 60px); z-index: 35; display:flex; gap:8px; flex-wrap:wrap; width:min(780px, 92%);
+      bottom: calc(16vh + 48px); z-index: 35; display:flex; gap:8px; flex-wrap:wrap; width:min(780px, 92%);
     }
-    .p-thumb { width:56px; height:56px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); }
+    .p-thumb { width:48px; height:48px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); }
     .p-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
-    .p-chip { height:28px; display:inline-flex; align-items:center; gap:6px; padding:0 10px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:#fff; font-size:12px; }
+    .p-chip { height:26px; display:inline-flex; align-items:center; gap:6px; padding:0 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:#fff; font-size:12px; }
 
-    /* Composer (ChatGPT-like) */
+    /* Composer — MENOR e responsivo */
     .composer {
       position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: 18vh; z-index: 40; width: min(780px, 92%);
-      display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end;
+      bottom: 16vh; z-index: 40; width: min(680px, 92%);
+      display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center;
     }
     .textarea-wrap {
       background: rgba(8,21,51,.85); border:1px solid rgba(255,255,255,.18);
-      border-radius:14px; padding:8px; display:flex; gap:8px; align-items:center;
-      box-shadow: 0 8px 22px rgba(0,0,0,.35);
+      border-radius:12px; padding:6px 8px; display:flex; gap:6px; align-items:center;
+      box-shadow: 0 6px 18px rgba(0,0,0,.35);
     }
     textarea.input {
-      width:100%; max-height:140px; min-height:44px; resize:none; border:none; outline:none;
-      background:transparent; color:#fff; font-size:15px; line-height:1.35;
+      width:100%; max-height:120px; min-height:38px; resize:none; border:none; outline:none;
+      background:transparent; color:#fff; font-size:14px; line-height:1.3;
     }
     .icon-btn, .send-btn {
-      height:44px; border-radius:12px; border:1px solid rgba(255,255,255,.18);
+      height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.18);
       background: rgba(255,255,255,.08); color:#fff; cursor:pointer; font-weight:600; transition:.15s ease;
     }
-    .icon-btn { width:46px; display:grid; place-items:center; font-size:18px; }
+    .icon-btn { width:40px; display:grid; place-items:center; font-size:18px; }
     .icon-btn:hover { background: rgba(255,255,255,.18); }
-    .send-btn { padding:0 14px; background:#2f70ff; border-color: rgba(47,112,255,.9); }
+    .send-btn { padding:0 12px; background:#2f70ff; border-color: rgba(47,112,255,.9); }
     .send-btn:hover { filter: brightness(1.05); }
     .send-btn[disabled] { opacity:.6; cursor:not-allowed; }
     .hidden-input { display:none; }
 
-    /* Controles — mic único com 3 estados */
+    /* Controles — mic LIGA/DESLIGA (sem trava) */
     .controls {
       position: fixed;
       left: 50%;
       transform: translateX(-50%);
-      bottom: 8vh;
+      bottom: 7vh;
       z-index: 20;
       display: flex;
       align-items: center;
@@ -227,25 +226,25 @@ export class GdmLiveAudio extends LitElement {
       box-shadow: 0 8px 22px rgba(0,0,0,.35);
     }
     .mic:hover { background: rgba(255,255,255,.20); }
-    .mic.active { outline: 2px solid rgba(47,112,255,.9); }
-    .mic.locked { background: rgba(8,21,51,.55); }
+    .mic.on { outline: 2px solid rgba(47,112,255,.9); }
 
     #status {
-      position:fixed; bottom:3.5vh; left:0; right:0; z-index:10;
-      text-align:center; color:#cfe0ff; font-size:13px; opacity:.9; padding:0 10px;
+      position:fixed; bottom:3.2vh; left:0; right:0; z-index:10;
+      text-align:center; color:#cfe0ff; font-size:12px; opacity:.9; padding:0 10px;
     }
 
-    @media (max-width: 768px) {
-      .composer { bottom: 22vh; }
-      .controls { bottom: 11vh; }
-      .overlay { bottom: calc(22vh + 230px); }
-      .chat-panel { bottom: 30vh; }
+    @media (max-width: 820px) {
+      .composer { width: min(560px, 94%); bottom: 18vh; }
+      .chat-panel { bottom: 32vh; }
+      .overlay { bottom: calc(18vh + 200px); }
     }
-    @media (max-width: 420px) {
-      .composer { width: min(96%, 560px); }
-      .previews { width: min(96%, 560px); bottom: calc(22vh + 56px); }
-      .links-box { width: min(96%, 560px); }
-      textarea.input { font-size: 14px; }
+    @media (max-width: 480px) {
+      .composer { width: min(96%, 520px); grid-template-columns: 1fr auto auto; gap: 6px; }
+      textarea.input { font-size: 13px; min-height: 36px; }
+      .icon-btn { width:38px; }
+      .send-btn { padding: 0 10px; }
+      .msg { font-size: 13px; max-width: 86%; }
+      .thumb { width: 96px; height: 96px; }
     }
   `;
 
@@ -281,7 +280,7 @@ export class GdmLiveAudio extends LitElement {
         callbacks: {
           onopen: async () => {
             this.updateStatus('Opened');
-            // 👋 Saudação automática na abertura (fala e escreve)
+            // Saudação automática ao abrir
             try {
               const s = await this.sessionPromise;
               (s as any).send?.({
@@ -290,17 +289,15 @@ export class GdmLiveAudio extends LitElement {
                     text:
 `Apresente-se imediatamente com a abertura oficial:
 "Olá! Eu sou o Amperito, assistente virtual da EFALL. Como posso te ajudar hoje? ⚡😊"
-Pergunte de forma objetiva:
+Pergunte:
 "Seu interesse é em energia solar, materiais elétricos ou materiais de construção?"
-E peça também:
+E também:
 "Qual seu nome e de qual cidade você fala?"`
                   }]
                 }
               });
               s.sendRealtimeInput({ turnComplete: {} });
-            } catch (e) {
-              console.error('Saudação automática falhou', e);
-            }
+            } catch (e) { console.error('Saudação automática falhou', e); }
           },
           onmessage: async (message: LiveServerMessage) => {
             // ÁUDIO de saída (fila)
@@ -332,6 +329,12 @@ E peça também:
                 this.displayedLinks = this.extractLinks(text);
               }
               this.currentOutputTranscription = '';
+
+              // Se pausamos automaticamente para enviar texto/mídia, retomamos o mic
+              if (this.isRecording && this.isPaused) {
+                try { await this.resumeListening(); } catch {}
+                this.updateStatus('🎙️ Retomado. Pode falar.');
+              }
             }
 
             // Interrompido → para fila
@@ -387,26 +390,15 @@ Rotas WhatsApp:
     if (panel) panel.scrollTop = panel.scrollHeight;
   }
 
-  // ===== Mic: botão único com 3 estados =====
-  private async toggleMic() {
+  // ===== Mic: LIGA/DESLIGA (sem trava manual) =====
+  private async toggleMicPower() {
     try {
-      // Parado → iniciar
       if (!this.isRecording) {
         await this.startRecording();
         this.updateStatus('🎙️ Ouvindo… fale com o Amperito.');
-        return;
-      }
-      // Ouvindo → travar (envia turnComplete)
-      if (this.isRecording && !this.isPaused) {
-        await this.pauseListening(); // já envia turnComplete
-        this.updateStatus('🔇 Microfone travado. Processando resposta…');
-        return;
-      }
-      // Travado → retomar
-      if (this.isRecording && this.isPaused) {
-        await this.resumeListening();
-        this.updateStatus('🎙️ Retomado. Pode falar.');
-        return;
+      } else {
+        this.stopRecording();
+        this.updateStatus('⏹️ Microfone desligado.');
       }
     } catch (e:any) {
       console.error(e);
@@ -470,7 +462,6 @@ Rotas WhatsApp:
   private stopRecording() {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext) return;
 
-    this.updateStatus('Stopping recording...');
     this.isRecording = false;
     this.isPaused = false;
 
@@ -484,20 +475,12 @@ Rotas WhatsApp:
       this.mediaStream.getTracks().forEach((t) => t.stop());
       this.mediaStream = null;
     }
-
-    this.updateStatus('Recording stopped. Clique no microfone para iniciar.');
-  }
-
-  private reset() {
-    try { (this as any).sessionPromise?.then((s: Session) => s.close()); } catch {}
-    this.initSession();
-    this.updateStatus('Session cleared.');
   }
 
   // ===== Entrada de texto & mídia =====
   private autoResize(el: HTMLTextAreaElement) {
     el.style.height = '0px';
-    el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   }
   private onTextInput(e: Event) {
     const el = e.target as HTMLTextAreaElement;
@@ -560,8 +543,9 @@ Rotas WhatsApp:
 
     this.isSending = true;
 
-    // Se estiver ouvindo, travar para o Amperito responder em paz
-    if (this.isRecording && !this.isPaused) {
+    // Pausa AUTOMÁTICA só durante o envio de texto/mídia
+    const shouldResumeAfter = this.isRecording && !this.isPaused;
+    if (shouldResumeAfter) {
       try { await this.pauseListening(); } catch {}
     }
 
@@ -569,7 +553,6 @@ Rotas WhatsApp:
       const parts: any[] = [];
       if (hasText) parts.push({ text: this.textInput.trim() });
 
-      // Mídias (imagens/áudios)
       const sentImages: string[] = [];
       const sentAudios: string[] = [];
 
@@ -584,7 +567,6 @@ Rotas WhatsApp:
       (s as any).send?.({ clientContent: { parts } });
       s.sendRealtimeInput({ turnComplete: {} });
 
-      // Histórico
       if (hasText) this.pushUserText(this.textInput.trim());
       if (sentImages.length || sentAudios.length) this.pushUserMedia(sentImages, sentAudios);
 
@@ -593,7 +575,6 @@ Rotas WhatsApp:
       this.pendingFiles = [];
       this.imagePreviews = [];
       this.audioChips = [];
-
       const ta = this.renderRoot?.querySelector('textarea.input') as HTMLTextAreaElement | null;
       if (ta) { ta.value = ''; this.autoResize(ta); }
 
@@ -695,7 +676,7 @@ Rotas WhatsApp:
           ${this.audioChips.map((name) => html`<div class="p-chip">🎵 ${name}</div>`)}
         </div>` : null}
 
-      <!-- Composer -->
+      <!-- Composer (MENOR e responsivo) -->
       <div class="composer" role="form" aria-label="Enviar mensagem e mídias">
         <div class="textarea-wrap">
           <textarea
@@ -721,18 +702,14 @@ Rotas WhatsApp:
         <button class="send-btn" @click=${this.sendTextAndMedia} ?disabled=${this.isSending}>Enviar</button>
       </div>
 
-      <!-- Controles: botão único do microfone -->
+      <!-- Controles: mic LIGA/DESLIGA -->
       <div class="controls" aria-label="Microfone">
         <button
-          class="mic ${this.isRecording ? (this.isPaused ? 'locked' : 'active') : ''}"
-          @click=${this.toggleMic}
-          title=${!this.isRecording
-            ? 'Iniciar microfone'
-            : this.isPaused
-              ? 'Retomar microfone'
-              : 'Travar microfone para o Amperito responder'}
+          class="mic ${this.isRecording ? 'on' : ''}"
+          @click=${this.toggleMicPower}
+          title=${this.isRecording ? 'Desligar microfone' : 'Ligar microfone'}
         >
-          ${!this.isRecording ? '🎙️' : this.isPaused ? '🔇' : '🎙️'}
+          ${this.isRecording ? '🎙️' : '🎙️'}
         </button>
       </div>
 
