@@ -10,6 +10,13 @@ import { customElement, state } from 'lit/decorators.js';
 import { createBlob, decode, decodeAudioData } from './utils';
 import './visual-3d';
 
+type PendingMedia = {
+  file: File;
+  kind: 'image' | 'audio' | 'other';
+  preview?: string; // dataURL p/ imagens
+  label?: string;   // nome p/ áudios/outros
+};
+
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   // ===== States =====
@@ -23,7 +30,8 @@ export class GdmLiveAudio extends LitElement {
   // Entrada do usuário
   @state() textInput = '';
   @state() imagePreviews: string[] = []; // dataURL para preview
-  private pendingFiles: File[] = [];
+  @state() audioChips: string[] = [];    // nomes dos áudios
+  private pendingFiles: PendingMedia[] = [];
   @state() isSending = false;
 
   // ===== Audio / Session =====
@@ -45,173 +53,68 @@ export class GdmLiveAudio extends LitElement {
 
   // ===== Styles (minimal, ChatGPT-like) =====
   static styles = css`
-    :host {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-
-    /* Caixa de links úteis (respostas com URLs) */
+    :host { display: block; width: 100%; height: 100%; }
     .links-box {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: calc(18vh + 200px);
-      z-index: 30;
-      background: rgba(18, 18, 24, 0.9);
-      backdrop-filter: blur(6px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      padding: 12px 14px;
-      color: #fff;
-      width: min(640px, 92%);
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(18vh + 200px); z-index: 30;
+      background: rgba(18,18,24,.9); backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,.1); border-radius: 12px;
+      padding: 12px 14px; color: #fff; width: min(640px, 92%);
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
-    .links-box h3 {
-      margin: 0 0 6px 0;
-      font-size: 14px;
-      font-weight: 600;
-      opacity: .9;
-      border-bottom: 1px dashed rgba(255,255,255,.15);
-      padding-bottom: 6px;
-    }
-    .links-list {
-      display: flex; flex-wrap: wrap; gap: 6px;
-    }
-    .links-list a {
-      display: inline-block;
-      color: #9cc3ff;
-      background: rgba(255,255,255,.06);
-      border: 1px solid rgba(255,255,255,.08);
-      border-radius: 8px;
-      padding: 6px 10px;
-      text-decoration: none;
-      font-size: 13px;
-    }
-    .links-list a:hover { background: rgba(156,195,255,.18); color: #fff; }
+    .links-box h3 { margin: 0 0 6px 0; font-size: 14px; font-weight: 600; opacity:.9; border-bottom: 1px dashed rgba(255,255,255,.15); padding-bottom: 6px; }
+    .links-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .links-list a { display:inline-block; color:#9cc3ff; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); border-radius:8px; padding:6px 10px; text-decoration:none; font-size:13px; }
+    .links-list a:hover { background: rgba(156,195,255,.18); color:#fff; }
 
-    /* Barra de entrada (tipo ChatGPT) */
     .composer {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: 18vh; /* acima dos controles de microfone */
-      z-index: 40;
-      width: min(780px, 92%);
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 8px;
-      align-items: end;
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: 18vh; z-index: 40; width: min(780px, 92%);
+      display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end;
     }
-
     .textarea-wrap {
-      background: rgba(22,22,28,.9);
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 14px;
-      padding: 8px;
-      display: flex;
-      gap: 8px;
-      align-items: center;
+      background: rgba(22,22,28,.9); border:1px solid rgba(255,255,255,.12);
+      border-radius:14px; padding:8px; display:flex; gap:8px; align-items:center;
       box-shadow: 0 8px 20px rgba(0,0,0,.25);
     }
-
     textarea.input {
-      width: 100%;
-      max-height: 140px;
-      min-height: 44px;
-      resize: none;
-      border: none;
-      outline: none;
-      background: transparent;
-      color: #fff;
-      font-size: 15px;
-      line-height: 1.35;
+      width:100%; max-height:140px; min-height:44px; resize:none; border:none; outline:none;
+      background:transparent; color:#fff; font-size:15px; line-height:1.35;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
-
     .icon-btn, .send-btn {
-      height: 44px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.08);
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
-      transition: .15s ease;
+      height:44px; border-radius:12px; border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.08); color:#fff; cursor:pointer; font-weight:600; transition:.15s ease;
     }
-    .icon-btn {
-      width: 46px;
-      display: grid; place-items: center;
-      font-size: 18px;
-    }
+    .icon-btn { width:46px; display:grid; place-items:center; font-size:18px; }
     .icon-btn:hover { background: rgba(255,255,255,.18); }
-
-    .send-btn {
-      padding: 0 14px;
-      background: #2f70ff;
-      border-color: rgba(47,112,255,.9);
-    }
+    .send-btn { padding:0 14px; background:#2f70ff; border-color: rgba(47,112,255,.9); }
     .send-btn:hover { filter: brightness(1.05); }
-    .send-btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .send-btn[disabled] { opacity:.6; cursor:not-allowed; }
+    .hidden-input { display:none; }
 
-    .hidden-input { display: none; }
-
-    /* Previews miniaturas */
     .previews {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: calc(18vh + 60px);
-      z-index: 35;
-      display: flex; gap: 8px; flex-wrap: wrap;
-      width: min(780px, 92%);
+      position: fixed; left:50%; transform:translateX(-50%);
+      bottom: calc(18vh + 60px); z-index:35; display:flex; gap:8px; flex-wrap:wrap; width:min(780px, 92%);
     }
-    .thumb {
-      width: 56px; height: 56px; border-radius: 10px;
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-    }
-    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb { width:56px; height:56px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); }
+    .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+    .chip { height:28px; display:inline-flex; align-items:center; gap:6px; padding:0 10px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); color:#fff; font-size:12px; }
 
-    /* Controles do mic (centralizados abaixo) */
     .controls {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: 8vh;
-      z-index: 20;
-      display: flex; gap: 10px;
-      align-items: center; justify-content: center;
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: 8vh; z-index: 20; display:flex; gap:10px; align-items:center; justify-content:center;
     }
     .circle {
-      width: 60px; height: 60px;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.08);
-      color: #fff;
-      font-size: 24px;
-      display: grid; place-items: center;
-      cursor: pointer;
-      transition: .15s ease;
+      width:60px; height:60px; border-radius:14px; border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.08); color:#fff; font-size:24px; display:grid; place-items:center; cursor:pointer; transition:.15s ease;
     }
     .circle:hover { background: rgba(255,255,255,.18); }
-    .circle[disabled] { opacity: .4; cursor: not-allowed; }
+    .circle[disabled] { opacity:.4; cursor:not-allowed; }
 
-    #status {
-      position: fixed;
-      bottom: 3.5vh;
-      left: 0; right: 0;
-      z-index: 10;
-      text-align: center;
-      color: #fff;
-      font-size: 13px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      opacity: .9;
-      padding: 0 10px;
-    }
+    #status { position:fixed; bottom:3.5vh; left:0; right:0; z-index:10; text-align:center; color:#fff; font-size:13px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; opacity:.9; padding:0 10px; }
 
-    /* Responsivo */
     @media (max-width: 768px) {
       .links-box { bottom: calc(22vh + 200px); }
       .composer { bottom: 22vh; grid-template-columns: 1fr auto auto; }
@@ -241,7 +144,7 @@ export class GdmLiveAudio extends LitElement {
   private async initClient() {
     this.initAudio();
     try {
-      // ===== SUA API KEY (inserida diretamente) =====
+      // ===== SUA API KEY (frontend — use proxy em produção) =====
       const apiKey = "AIzaSyD3y3ZZ05zMSH3o_73gfcN7rmcgBhEphNE";
 
       this.client = new GoogleGenAI({ apiKey });
@@ -262,8 +165,8 @@ export class GdmLiveAudio extends LitElement {
         callbacks: {
           onopen: () => this.updateStatus('Opened'),
           onmessage: async (message: LiveServerMessage) => {
+            // 1) Tocar saída de ÁUDIO (fila para não cortar)
             const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
-
             if (audio) {
               this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(
@@ -281,25 +184,38 @@ export class GdmLiveAudio extends LitElement {
               this.sources.add(source);
             }
 
+            // 2) Capturar texto (outputTranscription e/ou partes textuais)
             if (message.serverContent?.outputTranscription) {
               this.currentOutputTranscription += message.serverContent.outputTranscription.text;
             }
+            const textParts =
+              message.serverContent?.modelTurn?.parts?.filter((p: any) => typeof p.text === 'string') ?? [];
+            for (const p of textParts) {
+              this.currentOutputTranscription += p.text;
+            }
 
+            // 3) Fim do turno: extrair links, limpar buffer
             if (message.serverContent?.turnComplete) {
               this.displayedLinks = this.extractLinks(this.currentOutputTranscription);
               this.currentOutputTranscription = '';
             }
 
+            // 4) Interrompido: parar áudio em reprodução
             if (message.serverContent?.interrupted) {
-              for (const src of this.sources.values()) { try { src.stop(); } catch {} this.sources.delete(src); }
+              for (const src of this.sources.values()) {
+                try { src.stop(); } catch {}
+                this.sources.delete(src);
+              }
               this.nextStartTime = 0;
             }
           },
           onerror: (e: ErrorEvent) => this.updateError(e.message),
           onclose: (e: CloseEvent) => this.updateStatus('Close: ' + e.reason),
         },
+        // === Habilita ENTRADA multimodal e SAÍDA em áudio + texto ===
         config: {
-          responseModalities: [Modality.AUDIO],
+          inputModalities: [Modality.TEXT, Modality.IMAGE, Modality.AUDIO],
+          responseModalities: [Modality.AUDIO, Modality.TEXT],
           outputAudioTranscription: {},
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
           // ===== System prompt — entender primeiro, responder depois =====
@@ -341,15 +257,15 @@ Se o assunto não for claro: “Seu interesse é em energia solar, materiais el�
 👉 Efall Materiais de Construção – (54) 3471-1375 — https://wa.me/555434711375
 
 ## Política de Preços
-Nunca passar valores fechados sem contexto. Explique que varia por tipo/bitola/potência/aplicação.
+Nunca passar valores sem contexto. Explique que varia por tipo/bitola/potência/aplicação.
 Use: “Depende de alguns fatores técnicos. Posso coletar informações para te encaminhar o melhor valor?”
 
 ## Objeções
-- Preço / caro: “Entendo. Nosso foco é economia real e segurança. Quer que eu peça uma avaliação?”
-- Quer falar com alguém: “Claro, vou te direcionar agora. Clique no link na tela.”
+- Preço: “Entendo. Nosso foco é economia real e segurança. Quer que eu peça uma avaliação?”
+- Humano: “Claro, vou te direcionar agora. Clique no link na tela.”
 
 ## Fechamento
-Sempre manter a conversa aberta e confirmar se a orientação ajudou.
+Confirme se ajudou e mantenha a conversa aberta.
           `,
         },
       });
@@ -456,7 +372,7 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
     this.updateStatus('Session cleared.');
   }
 
-  // ===== Text & Images =====
+  // ===== Text & Media =====
   private autoResize(el: HTMLTextAreaElement) {
     el.style.height = '0px';
     el.style.height = Math.min(el.scrollHeight, 140) + 'px';
@@ -471,7 +387,7 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
   private onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      this.sendTextAndImages();
+      this.sendTextAndMedia();
     }
   }
 
@@ -479,11 +395,25 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
 
-    const files = Array.from(input.files).filter((f) => f.type.startsWith('image/'));
-    this.pendingFiles.push(...files);
+    const files = Array.from(input.files);
     for (const f of files) {
-      const dataUrl = await this.fileToDataURL(f);
-      this.imagePreviews = [...this.imagePreviews, dataUrl];
+      const mime = (f.type || '').toLowerCase();
+      const isImg = mime.startsWith('image/');
+      const isAudio = mime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|webm)$/i.test(f.name);
+
+      const entry: PendingMedia = {
+        file: f,
+        kind: isImg ? 'image' : isAudio ? 'audio' : 'other',
+        label: f.name
+      };
+
+      if (isImg) {
+        entry.preview = await this.fileToDataURL(f);
+        this.imagePreviews = [...this.imagePreviews, entry.preview];
+      } else if (isAudio) {
+        this.audioChips = [...this.audioChips, f.name];
+      }
+      this.pendingFiles.push(entry);
     }
     input.value = '';
   }
@@ -502,39 +432,48 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
     const bytes = new Uint8Array(buf);
     let bin = '';
     for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-    return { mimeType: file.type || 'image/png', data: btoa(bin) };
+    return { mimeType: file.type || 'application/octet-stream', data: btoa(bin) };
+    // Nota: o SDK aceita inlineData com mimeType correto (image/*, audio/*, etc.)
   }
 
-  private async sendTextAndImages() {
+  private async sendTextAndMedia() {
     if (this.isSending) return;
     const hasText = this.textInput.trim().length > 0;
-    const hasImgs = this.pendingFiles.length > 0;
-    if (!hasText && !hasImgs) return;
+    const hasMedia = this.pendingFiles.length > 0;
+    if (!hasText && !hasMedia) return;
 
     this.isSending = true;
 
     // Pausa o mic para não sobrepor
-    if (this.isRecording && !this.isPaused) { await this.pauseListening().catch(() => {}); }
+    if (this.isRecording && !this.isPaused) {
+      try { await this.pauseListening(); } catch {}
+    }
 
     try {
       const parts: any[] = [];
-      if (hasText) parts.push({ text: this.textInput.trim() });
-      if (hasImgs) {
-        for (const f of this.pendingFiles) {
-          const { mimeType, data } = await this.fileToBase64AndType(f);
-          parts.push({ inlineData: { mimeType, data } });
-        }
+
+      // Texto
+      if (hasText) {
+        parts.push({ text: this.textInput.trim() });
       }
 
+      // Mídias (imagens/áudios)
+      for (const item of this.pendingFiles) {
+        const { mimeType, data } = await this.fileToBase64AndType(item.file);
+        parts.push({ inlineData: { mimeType, data } });
+      }
+
+      // Envia para a sessão Live
       await this.sessionPromise.then((s) => {
         (s as any).send?.({ clientContent: { parts } });
         s.sendRealtimeInput({ turnComplete: {} });
       });
 
-      // limpa UI
+      // Limpa UI
       this.textInput = '';
       this.pendingFiles = [];
       this.imagePreviews = [];
+      this.audioChips = [];
 
       // reseta altura do textarea
       const ta = this.renderRoot?.querySelector('textarea.input') as HTMLTextAreaElement | null;
@@ -564,14 +503,15 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
           </div>
         ` : null}
 
-        ${this.imagePreviews.length ? html`
+        ${(this.imagePreviews.length || this.audioChips.length) ? html`
           <div class="previews">
-            ${this.imagePreviews.map((src) => html`<div class="thumb"><img src=${src} alt="preview" /></div>`)}
+            ${this.imagePreviews.map((src) => html`<div class="thumb" title="imagem selecionada"><img src=${src} alt="preview" /></div>`)}
+            ${this.audioChips.map((name) => html`<div class="chip" title="áudio selecionado">🎵 ${name}</div>`)}
           </div>
         ` : null}
 
         <!-- Composer (ChatGPT-like) -->
-        <div class="composer" role="form" aria-label="Enviar mensagem e imagens">
+        <div class="composer" role="form" aria-label="Enviar mensagem e mídias">
           <div class="textarea-wrap">
             <textarea
               class="input"
@@ -583,12 +523,19 @@ Sempre manter a conversa aberta e confirmar se a orientação ajudou.
             ></textarea>
           </div>
 
-          <label class="icon-btn" for="fileUpload" title="Enviar foto (📷)">
+          <label class="icon-btn" for="fileUpload" title="Enviar foto/áudio (📷/🎵)">
             📷
           </label>
-          <input id="fileUpload" class="hidden-input" type="file" accept="image/*" multiple @change=${this.onFileChange} />
+          <input
+            id="fileUpload"
+            class="hidden-input"
+            type="file"
+            accept="image/*,audio/*,.mp3,.wav,.m4a,.ogg,.webm"
+            multiple
+            @change=${this.onFileChange}
+          />
 
-          <button class="send-btn" @click=${this.sendTextAndImages} ?disabled=${this.isSending}>Enviar</button>
+          <button class="send-btn" @click=${this.sendTextAndMedia} ?disabled=${this.isSending}>Enviar</button>
         </div>
 
         <!-- Mic controls -->
