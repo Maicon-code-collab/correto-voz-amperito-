@@ -279,7 +279,29 @@ export class GdmLiveAudio extends LitElement {
       this.sessionPromise = this.client.live.connect({
         model,
         callbacks: {
-          onopen: () => this.updateStatus('Opened'),
+          onopen: async () => {
+            this.updateStatus('Opened');
+            // 👋 Saudação automática na abertura (fala e escreve)
+            try {
+              const s = await this.sessionPromise;
+              (s as any).send?.({
+                clientContent: {
+                  parts: [{
+                    text:
+`Apresente-se imediatamente com a abertura oficial:
+"Olá! Eu sou o Amperito, assistente virtual da EFALL. Como posso te ajudar hoje? ⚡😊"
+Pergunte de forma objetiva:
+"Seu interesse é em energia solar, materiais elétricos ou materiais de construção?"
+E peça também:
+"Qual seu nome e de qual cidade você fala?"`
+                  }]
+                }
+              });
+              s.sendRealtimeInput({ turnComplete: {} });
+            } catch (e) {
+              console.error('Saudação automática falhou', e);
+            }
+          },
           onmessage: async (message: LiveServerMessage) => {
             // ÁUDIO de saída (fila)
             const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
@@ -558,10 +580,9 @@ Rotas WhatsApp:
         if (item.kind === 'audio' && item.label) sentAudios.push(item.label);
       }
 
-      await this.sessionPromise.then((s) => {
-        (s as any).send?.({ clientContent: { parts } });
-        s.sendRealtimeInput({ turnComplete: {} });
-      });
+      const s = await this.sessionPromise;
+      (s as any).send?.({ clientContent: { parts } });
+      s.sendRealtimeInput({ turnComplete: {} });
 
       // Histórico
       if (hasText) this.pushUserText(this.textInput.trim());
