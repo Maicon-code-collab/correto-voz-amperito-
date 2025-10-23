@@ -10,48 +10,18 @@ import { customElement, state } from 'lit/decorators.js';
 import { createBlob, decode, decodeAudioData } from './utils';
 import './visual-3d';
 
-type ChatEntry = {
-  role: 'user' | 'assistant';
-  kind: 'text' | 'media' | 'audio';
-  text?: string;
-  images?: string[];  // dataURLs
-  audios?: string[];  // nomes de arquivos
-  ts: number;
-};
-
-type PendingMedia = {
-  file: File;
-  kind: 'image' | 'audio' | 'other';
-  preview?: string;
-  label?: string;
-};
-
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
-  // ===== States =====
-  @state() isRecording = false;   // mic on/off (sem trava)
-  @state() isPaused = false;      // usado só internamente p/ pausa automática de envio
+  @state() isRecording = false;
   @state() status = '';
   @state() error = '';
   @state() currentOutputTranscription = '';
   @state() displayedLinks: string[] = [];
 
-  // Entrada do usuário
-  @state() textInput = '';
-  @state() imagePreviews: string[] = [];
-  @state() audioChips: string[] = [];
-  private pendingFiles: PendingMedia[] = [];
-  @state() isSending = false;
-
-  // Histórico + overlay
-  @state() chatHistory: ChatEntry[] = [];
-  private readonly overlayMax = 6;
-
-  // ===== Audio / Session =====
   private client!: GoogleGenAI;
   private sessionPromise!: Promise<Session>;
 
-  // Audio contexts
+  // Audio contexts (com fallback para Safari)
   private inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
   private outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
@@ -64,187 +34,84 @@ export class GdmLiveAudio extends LitElement {
   private scriptProcessorNode: ScriptProcessorNode | null = null;
   private sources = new Set<AudioBufferSourceNode>();
 
-  // ===== Styles =====
   static styles = css`
-    :host {
-      display: block;
-      width: 100%;
-      height: 100%;
-      background: radial-gradient(1200px 1200px at 70% 0%, #183a84 0%, #0b1f4a 50%, #081533 100%);
-      position: relative;
-      color: #eaf1ff;
+    .links-box {
+      position: absolute;
+      bottom: calc(10vh + 160px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: rgba(20, 20, 30, 0.85);
+      border-radius: 12px;
+      padding: 15px 20px;
+      font-family: sans-serif;
+      color: white;
+      width: 90%;
+      max-width: 420px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    .links-box h3 {
+      margin: 0 0 10px 0;
+      font-size: 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      padding-bottom: 8px;
+    }
+    .links-box a {
+      display: inline-block;
+      color: #90c8ff;
+      text-decoration: none;
+      font-size: 15px;
+      margin: 4px 8px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+    }
+    .links-box a:hover {
+      background: rgba(144, 200, 255, 0.25);
+      color: #ffffff;
+    }
+    #status {
+      position: absolute;
+      bottom: 5vh;
+      left: 0;
+      right: 0;
+      z-index: 10;
+      text-align: center;
+      color: #fff;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
-
-    /* Painel de chat (WhatsApp-like) */
-    .chat-panel {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      top: 20px;
-      bottom: 28vh;
-      width: min(860px, 92%);
-      overflow-y: auto;
-      padding: 8px 8px 72px;
-      box-sizing: border-box;
-    }
-    .day-sep {
-      text-align: center;
-      margin: 6px 0 10px;
-      font-size: 12px;
-      opacity: .75;
-    }
-    .msg {
-      display: inline-block;
-      max-width: 78%;
-      margin: 5px 0;
-      padding: 8px 10px;
-      border-radius: 14px;
-      line-height: 1.35;
-      position: relative;
-      box-shadow: 0 6px 20px rgba(0,0,0,.18);
-      word-wrap: break-word;
-      white-space: pre-wrap;
-      font-size: 14px;
-    }
-    .msg.user {
-      background: #2f70ff;
-      color: #fff;
-      border: 1px solid rgba(255,255,255,.12);
-      margin-left: auto;
-      border-bottom-right-radius: 6px;
-    }
-    .msg.assistant {
-      background: rgba(255,255,255,.06);
-      color: #eaf1ff;
-      border: 1px solid rgba(255,255,255,.08);
-      margin-right: auto;
-      border-bottom-left-radius: 6px;
-    }
-    .bubble { display: flex; flex-direction: column; gap: 6px; }
-    .thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
-    .thumb {
-      width: 110px; height: 110px; border-radius: 10px; overflow: hidden;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-    }
-    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip {
-      height: 24px; display:inline-flex; align-items:center; gap:6px; padding:0 8px;
-      border-radius:999px; border:1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.08); color:#fff; font-size:12px;
-    }
-    .ts { font-size: 10px; opacity: .75; margin-top: 2px; align-self: flex-end; }
-
-    /* Overlay "máquina de escrever" meio apagado */
-    .overlay {
-      position: fixed;
-      left: 16px; right: 16px; bottom: calc(16vh + 220px);
-      z-index: 22;
-      display: grid;
-      gap: 4px;
-      pointer-events: none;
-      font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, monospace;
-      opacity: .55;
-      color: #cfe0ff;
-      text-shadow: 0 1px 0 rgba(0,0,0,.25);
-      max-height: 34vh; overflow: hidden;
-      mask-image: linear-gradient(to bottom, rgba(0,0,0,1), rgba(0,0,0,.85), rgba(0,0,0,0));
-    }
-    .overlay-line { font-size: 12px; letter-spacing: .2px; white-space: pre-wrap; }
-
-    /* Links úteis */
-    .links-box {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(16vh + 190px); z-index: 30;
-      background: rgba(8,21,51,.85); backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
-      padding: 10px 12px; color: #fff; width: min(640px, 92%);
-    }
-    .links-box h3 { margin: 0 0 6px 0; font-size: 13px; font-weight: 600; opacity:.9; border-bottom: 1px dashed rgba(255,255,255,.15); padding-bottom: 6px; }
-    .links-list { display:flex; flex-wrap:wrap; gap:6px; }
-    .links-list a {
-      display:inline-block; color:#9cc3ff; background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.08); border-radius:8px; padding:5px 8px; text-decoration:none; font-size:12px;
-    }
-
-    /* Previews antes de enviar */
-    .previews {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(16vh + 48px); z-index: 35; display:flex; gap:8px; flex-wrap:wrap; width:min(780px, 92%);
-    }
-    .p-thumb { width:48px; height:48px; border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); }
-    .p-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
-    .p-chip { height:26px; display:inline-flex; align-items:center; gap:6px; padding:0 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:#fff; font-size:12px; }
-
-    /* Composer — MENOR e responsivo */
-    .composer {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: 16vh; z-index: 40; width: min(680px, 92%);
-      display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center;
-    }
-    .textarea-wrap {
-      background: rgba(8,21,51,.85); border:1px solid rgba(255,255,255,.18);
-      border-radius:12px; padding:6px 8px; display:flex; gap:6px; align-items:center;
-      box-shadow: 0 6px 18px rgba(0,0,0,.35);
-    }
-    textarea.input {
-      width:100%; max-height:120px; min-height:38px; resize:none; border:none; outline:none;
-      background:transparent; color:#fff; font-size:14px; line-height:1.3;
-    }
-    .icon-btn, .send-btn {
-      height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.18);
-      background: rgba(255,255,255,.08); color:#fff; cursor:pointer; font-weight:600; transition:.15s ease;
-    }
-    .icon-btn { width:40px; display:grid; place-items:center; font-size:18px; }
-    .icon-btn:hover { background: rgba(255,255,255,.18); }
-    .send-btn { padding:0 12px; background:#2f70ff; border-color: rgba(47,112,255,.9); }
-    .send-btn:hover { filter: brightness(1.05); }
-    .send-btn[disabled] { opacity:.6; cursor:not-allowed; }
-    .hidden-input { display:none; }
-
-    /* Controles — mic LIGA/DESLIGA (sem trava) */
     .controls {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: 7vh;
-      z-index: 20;
+      z-index: 10;
+      position: absolute;
+      bottom: 10vh;
+      left: 0;
+      right: 0;
       display: flex;
       align-items: center;
       justify-content: center;
+      flex-direction: column;
+      gap: 10px;
     }
-    .mic {
-      width: 64px; height: 64px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,.18);
-      background: rgba(255,255,255,.10);
-      color:#fff; font-size:26px;
-      display:grid; place-items:center;
-      cursor:pointer; transition:.15s ease;
-      box-shadow: 0 8px 22px rgba(0,0,0,.35);
+    .controls button {
+      outline: none;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.1);
+      width: 64px;
+      height: 64px;
+      cursor: pointer;
+      font-size: 24px;
+      padding: 0;
+      margin: 0;
     }
-    .mic:hover { background: rgba(255,255,255,.20); }
-    .mic.on { outline: 2px solid rgba(47,112,255,.9); }
-
-    #status {
-      position:fixed; bottom:3.2vh; left:0; right:0; z-index:10;
-      text-align:center; color:#cfe0ff; font-size:12px; opacity:.9; padding:0 10px;
+    .controls button:hover {
+      background: rgba(255, 255, 255, 0.2);
     }
-
-    @media (max-width: 820px) {
-      .composer { width: min(560px, 94%); bottom: 18vh; }
-      .chat-panel { bottom: 32vh; }
-      .overlay { bottom: calc(18vh + 200px); }
-    }
-    @media (max-width: 480px) {
-      .composer { width: min(96%, 520px); grid-template-columns: 1fr auto auto; gap: 6px; }
-      textarea.input { font-size: 13px; min-height: 36px; }
-      .icon-btn { width:38px; }
-      .send-btn { padding: 0 10px; }
-      .msg { font-size: 13px; max-width: 86%; }
-      .thumb { width: 96px; height: 96px; }
+    .controls button[disabled] {
+      display: none;
     }
   `;
 
@@ -253,7 +120,6 @@ export class GdmLiveAudio extends LitElement {
     this.initClient();
   }
 
-  // ===== Init =====
   private initAudio() {
     this.nextStartTime = this.outputAudioContext.currentTime;
   }
@@ -261,8 +127,11 @@ export class GdmLiveAudio extends LitElement {
   private async initClient() {
     this.initAudio();
     try {
-      // ⚠️ Em produção, mover para backend/proxy
-      const apiKey = "AIzaSyD3y3ZZ05zMSH3o_73gfcN7rmcgBhEphNE";
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('VITE_GEMINI_API_KEY ausente (configure nas Environment Variables da Vercel).');
+      }
+
       this.client = new GoogleGenAI({ apiKey });
       this.outputNode.connect(this.outputAudioContext.destination);
       await this.initSession();
@@ -274,72 +143,52 @@ export class GdmLiveAudio extends LitElement {
 
   private async initSession() {
     const model = 'gemini-2.5-flash-native-audio-preview-09-2025';
+
     try {
       this.sessionPromise = this.client.live.connect({
         model,
         callbacks: {
-          onopen: async () => {
+          onopen: () => {
             this.updateStatus('Opened');
-            // Saudação automática ao abrir
-            try {
-              const s = await this.sessionPromise;
-              (s as any).send?.({
-                clientContent: {
-                  parts: [{
-                    text:
-`Apresente-se imediatamente com a abertura oficial:
-"Olá! Eu sou o Amperito, assistente virtual da EFALL. Como posso te ajudar hoje? ⚡😊"
-Pergunte:
-"Seu interesse é em energia solar, materiais elétricos ou materiais de construção?"
-E também:
-"Qual seu nome e de qual cidade você fala?"`
-                  }]
-                }
-              });
-              s.sendRealtimeInput({ turnComplete: {} });
-            } catch (e) { console.error('Saudação automática falhou', e); }
           },
           onmessage: async (message: LiveServerMessage) => {
-            // ÁUDIO de saída (fila)
             const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
+
             if (audio) {
               this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
-              const audioBuffer = await decodeAudioData(decode(audio.data), this.outputAudioContext, 24000, 1);
+
+              const audioBuffer = await decodeAudioData(
+                decode(audio.data),
+                this.outputAudioContext,
+                24000,
+                1,
+              );
+
               const source = this.outputAudioContext.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(this.outputNode);
               source.addEventListener('ended', () => this.sources.delete(source));
+
               source.start(this.nextStartTime);
               this.nextStartTime += audioBuffer.duration;
               this.sources.add(source);
             }
 
-            // TEXTO (transcrição e partes textuais)
             if (message.serverContent?.outputTranscription) {
               this.currentOutputTranscription += message.serverContent.outputTranscription.text;
             }
-            const textParts = message.serverContent?.modelTurn?.parts?.filter((p: any) => typeof p.text === 'string') ?? [];
-            for (const p of textParts) this.currentOutputTranscription += p.text;
 
-            // Fim do turno → push no histórico + links
             if (message.serverContent?.turnComplete) {
-              const text = this.currentOutputTranscription.trim();
-              if (text) {
-                this.pushAssistantText(text);
-                this.displayedLinks = this.extractLinks(text);
-              }
+              this.displayedLinks = this.extractLinks(this.currentOutputTranscription);
               this.currentOutputTranscription = '';
-
-              // Se pausamos automaticamente para enviar texto/mídia, retomamos o mic
-              if (this.isRecording && this.isPaused) {
-                try { await this.resumeListening(); } catch {}
-                this.updateStatus('🎙️ Retomado. Pode falar.');
-              }
             }
 
-            // Interrompido → para fila
-            if (message.serverContent?.interrupted) {
-              for (const src of this.sources.values()) { try { src.stop(); } catch {} this.sources.delete(src); }
+            const interrupted = message.serverContent?.interrupted;
+            if (interrupted) {
+              for (const src of this.sources.values()) {
+                try { src.stop(); } catch {}
+                this.sources.delete(src);
+              }
               this.nextStartTime = 0;
             }
           },
@@ -347,23 +196,36 @@ E também:
           onclose: (e: CloseEvent) => this.updateStatus('Close: ' + e.reason),
         },
         config: {
-          inputModalities: [Modality.TEXT, Modality.IMAGE, Modality.AUDIO],
-          responseModalities: [Modality.AUDIO, Modality.TEXT],
+          responseModalities: [Modality.AUDIO],
           outputAudioTranscription: {},
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-          systemInstruction: `
-Você é o **Amperito**, assistente virtual oficial da **EFALL**.
-Regra de ouro: entenda primeiro; responda/encaminhe depois. Fale por voz e escreva curto. Se houver dúvida, faça 1 pergunta objetiva.
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+          },
+          systemInstruction: `Você é o Amperito, assistente virtual da EFALL.
 
-Frentes: ⚡ Materiais Elétricos | 🧱 Materiais de Construção | 🔆 Energia Solar.
-Abra: “Olá! Eu sou o Amperito, assistente virtual da EFALL. Como posso te ajudar hoje? ⚡😊”
-Se não estiver claro: “Seu interesse é em energia solar, materiais elétricos ou materiais de construção?”
-Pergunte: nome e cidade. Nunca passe preços sem contexto. Mantenha a conversa aberta.
-Rotas WhatsApp:
-- Engenharia Solar: https://wa.me/555499768875
-- Materiais Elétricos: https://wa.me/5554996941592
-- Materiais de Construção: https://wa.me/555434711375
-          `,
+# 1. Identidade e Tom
+- Estilo simpático, direto e profissional. Frases curtas (até 2 linhas).
+- Objetivo: identificar a necessidade e encaminhar para o WhatsApp correto.
+- Regra: Pergunte antes de oferecer. Não invente infos. Não finalize por conta.
+
+# 2. Fluxo
+1) "Eu sou o Amperito, assistente virtual da EFALL! Como posso te ajudar? 😊"
+2) Pergunte UMA DE CADA VEZ: "Qual seu nome?", "De qual cidade você fala?", "Seu interesse é em energia solar, materiais elétricos ou materiais de construção?"
+3) Se solar: "Legal! Qual seu objetivo: economia, backup ou expansão?"
+4) Roteie com a frase certa e diga que o link está na tela (não leia o link).
+
+# 3. Setores e Links
+- Energia Solar → "Fale com nosso especialista pelo link na tela." → https://wa.me/5554997121367
+- Materiais Elétricos → "Chame direto pelo link na tela." → https://wa.me/555496941592
+- Materiais de Construção → "Chame direto no link da tela." → https://wa.me/555499892871
+
+# 4. Objeções
+- Preços → "Depende de diagnóstico. Posso coletar alguns dados?"
+- Está caro → "Entendo. Nosso foco é economia real e segurança. Posso pedir avaliação?"
+- Quer falar com alguém → "Vou te direcionar agora. Clique no link na tela."
+
+# 5. Regra Final
+- Usuário fala por voz. Você responde SEMPRE por voz.`,
         },
       });
     } catch (e) {
@@ -372,41 +234,26 @@ Rotas WhatsApp:
     }
   }
 
-  // ===== Helpers =====
   private getLinkName(link: string): string {
-    if (link.includes('555499768875')) return 'Especialista Solar';
-    if (link.includes('5554996941592')) return 'Materiais Elétricos';
-    if (link.includes('555434711375')) return 'Materiais de Construção';
+    if (link.includes('5554997121367')) return 'Especialista Solar';
+    if (link.includes('555496941592')) return 'Materiais Elétricos';
+    if (link.includes('555499892871')) return 'Materiais de Construção';
     return link;
   }
+
   private extractLinks(text: string): string[] {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return text.match(urlRegex) || [];
   }
-  private updateStatus(msg: string) { this.status = msg; }
-  private updateError(msg: string) { this.error = msg; }
-  private scrollChatToBottom() {
-    const panel = this.renderRoot?.querySelector('.chat-panel') as HTMLElement | null;
-    if (panel) panel.scrollTop = panel.scrollHeight;
+
+  private updateStatus(msg: string) {
+    this.status = msg;
   }
 
-  // ===== Mic: LIGA/DESLIGA (sem trava manual) =====
-  private async toggleMicPower() {
-    try {
-      if (!this.isRecording) {
-        await this.startRecording();
-        this.updateStatus('🎙️ Ouvindo… fale com o Amperito.');
-      } else {
-        this.stopRecording();
-        this.updateStatus('⏹️ Microfone desligado.');
-      }
-    } catch (e:any) {
-      console.error(e);
-      this.updateError(e?.message ?? String(e));
-    }
+  private updateError(msg: string) {
+    this.error = msg;
   }
 
-  // ===== Mic control (stream PCM para Live) =====
   private async startRecording() {
     if (this.isRecording) return;
 
@@ -424,20 +271,19 @@ Rotas WhatsApp:
       this.scriptProcessorNode = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
 
       this.scriptProcessorNode.onaudioprocess = (ev) => {
-        if (!this.isRecording || this.isPaused) return;
-        const pcmData = ev.inputBuffer.getChannelData(0);
-        this.sessionPromise
-          .then((session) => session.sendRealtimeInput({ media: createBlob(pcmData) }))
-          .catch((err) => this.updateError(String(err)));
+        if (!this.isRecording) return;
+        const inputBuffer = ev.inputBuffer;
+        const pcmData = inputBuffer.getChannelData(0);
+        this.sessionPromise.then((session) => {
+          session.sendRealtimeInput({ media: createBlob(pcmData) });
+        }).catch(err => this.updateError(String(err)));
       };
 
       this.sourceNode.connect(this.scriptProcessorNode);
       this.scriptProcessorNode.connect(this.inputAudioContext.destination);
 
       this.isRecording = true;
-      this.isPaused = false;
-      this.pushUserAudioMarker();
-      this.updateStatus('🔴 Gravando… Capturando áudio.');
+      this.updateStatus('🔴 Recording... Capturing PCM chunks.');
     } catch (err: any) {
       console.error('Error starting recording:', err);
       this.updateStatus(`Error: ${err?.message ?? err}`);
@@ -445,25 +291,11 @@ Rotas WhatsApp:
     }
   }
 
-  private async pauseListening() {
-    if (!this.isRecording || this.isPaused) return;
-    try { this.mediaStream?.getAudioTracks().forEach((t) => (t.enabled = false)); } catch {}
-    try { await this.sessionPromise.then((s) => s.sendRealtimeInput({ turnComplete: {} })); } catch {}
-    this.isPaused = true;
-  }
-
-  private async resumeListening() {
-    if (!this.isRecording || !this.isPaused) return;
-    try { this.mediaStream?.getAudioTracks().forEach((t) => (t.enabled = true)); } catch {}
-    try { await this.inputAudioContext.resume(); } catch {}
-    this.isPaused = false;
-  }
-
   private stopRecording() {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext) return;
 
+    this.updateStatus('Stopping recording...');
     this.isRecording = false;
-    this.isPaused = false;
 
     try { this.scriptProcessorNode?.disconnect(); } catch {}
     try { this.sourceNode?.disconnect(); } catch {}
@@ -475,250 +307,51 @@ Rotas WhatsApp:
       this.mediaStream.getTracks().forEach((t) => t.stop());
       this.mediaStream = null;
     }
+
+    this.updateStatus('Recording stopped. Click Start to begin again.');
   }
 
-  // ===== Entrada de texto & mídia =====
-  private autoResize(el: HTMLTextAreaElement) {
-    el.style.height = '0px';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-  }
-  private onTextInput(e: Event) {
-    const el = e.target as HTMLTextAreaElement;
-    this.textInput = el.value;
-    this.autoResize(el);
-  }
-  private onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      this.sendTextAndMedia();
-    }
-  }
-  private async onFileChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
-
-    const files = Array.from(input.files);
-    for (const f of files) {
-      const mime = (f.type || '').toLowerCase();
-      const isImg = mime.startsWith('image/');
-      const isAudio = mime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|webm)$/i.test(f.name);
-
-      const entry: PendingMedia = {
-        file: f,
-        kind: isImg ? 'image' : isAudio ? 'audio' : 'other',
-        label: f.name
-      };
-
-      if (isImg) {
-        entry.preview = await this.fileToDataURL(f);
-        this.imagePreviews = [...this.imagePreviews, entry.preview];
-      } else if (isAudio) {
-        this.audioChips = [...this.audioChips, f.name];
-      }
-      this.pendingFiles.push(entry);
-    }
-    input.value = '';
-  }
-  private async fileToDataURL(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result));
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-  }
-  private async fileToBase64AndType(file: File): Promise<{ mimeType: string; data: string }> {
-    const buf = await file.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let bin = '';
-    for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-    return { mimeType: file.type || 'application/octet-stream', data: btoa(bin) };
-  }
-
-  private async sendTextAndMedia() {
-    if (this.isSending) return;
-    const hasText = this.textInput.trim().length > 0;
-    const hasMedia = this.pendingFiles.length > 0;
-    if (!hasText && !hasMedia) return;
-
-    this.isSending = true;
-
-    // Pausa AUTOMÁTICA só durante o envio de texto/mídia
-    const shouldResumeAfter = this.isRecording && !this.isPaused;
-    if (shouldResumeAfter) {
-      try { await this.pauseListening(); } catch {}
-    }
-
-    try {
-      const parts: any[] = [];
-      if (hasText) parts.push({ text: this.textInput.trim() });
-
-      const sentImages: string[] = [];
-      const sentAudios: string[] = [];
-
-      for (const item of this.pendingFiles) {
-        const { mimeType, data } = await this.fileToBase64AndType(item.file);
-        parts.push({ inlineData: { mimeType, data } });
-        if (item.kind === 'image' && item.preview) sentImages.push(item.preview);
-        if (item.kind === 'audio' && item.label) sentAudios.push(item.label);
-      }
-
-      const s = await this.sessionPromise;
-      (s as any).send?.({ clientContent: { parts } });
-      s.sendRealtimeInput({ turnComplete: {} });
-
-      if (hasText) this.pushUserText(this.textInput.trim());
-      if (sentImages.length || sentAudios.length) this.pushUserMedia(sentImages, sentAudios);
-
-      // Limpeza UI
-      this.textInput = '';
-      this.pendingFiles = [];
-      this.imagePreviews = [];
-      this.audioChips = [];
-      const ta = this.renderRoot?.querySelector('textarea.input') as HTMLTextAreaElement | null;
-      if (ta) { ta.value = ''; this.autoResize(ta); }
-
-      this.updateStatus('Mensagem enviada. Aguardando resposta…');
-      this.scrollChatToBottom();
-    } catch (e: any) {
-      console.error(e);
-      this.updateError(e?.message ?? String(e));
-    } finally {
-      this.isSending = false;
-    }
-  }
-
-  // ===== Histórico (helpers) =====
-  private pushUserText(text: string) {
-    this.chatHistory = [...this.chatHistory, { role: 'user', kind: 'text', text, ts: Date.now() }];
-    this.scrollChatToBottom();
-  }
-  private pushUserMedia(images: string[], audios: string[]) {
-    if (!images.length && !audios.length) return;
-    this.chatHistory = [...this.chatHistory, { role: 'user', kind: 'media', images, audios, ts: Date.now() }];
-    this.scrollChatToBottom();
-  }
-  private pushUserAudioMarker() {
-    this.chatHistory = [...this.chatHistory, { role: 'user', kind: 'audio', text: '🎙️ Você enviou áudio pelo microfone', ts: Date.now() }];
-    this.scrollChatToBottom();
-  }
-  private pushAssistantText(text: string) {
-    this.chatHistory = [...this.chatHistory, { role: 'assistant', kind: 'text', text, ts: Date.now() }];
-    this.scrollChatToBottom();
-  }
-
-  // ===== Render =====
-  private fmtTime(ts: number) {
-    try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-    catch { return ''; }
-  }
-  private overlayLines(): string[] {
-    const lines: string[] = [];
-    const pick = [...this.chatHistory].slice(-this.overlayMax);
-    for (const m of pick) {
-      const who = m.role === 'user' ? 'Você' : 'Amperito';
-      if (m.kind === 'text' && m.text) lines.push(`> ${who}: ${m.text}`);
-      else if (m.kind === 'audio') lines.push(`> ${who}: [ÁUDIO]`);
-      else if (m.kind === 'media') {
-        const parts: string[] = [];
-        if (m.images?.length) parts.push(`[${m.images.length} FOTO(s)]`);
-        if (m.audios?.length) parts.push(`[${m.audios.length} ÁUDIO(s)]`);
-        lines.push(`> ${who}: ${parts.join(' ') || '[MÍDIA]'}`);
-      }
-    }
-    return lines;
+  private reset() {
+    try { (this as any).sessionPromise?.then((s: Session) => s.close()); } catch {}
+    this.initSession();
+    this.updateStatus('Session cleared.');
   }
 
   render() {
     return html`
-      <!-- Chat -->
-      <div class="chat-panel" aria-live="polite">
-        ${this.chatHistory.length === 0 ? html`<div class="day-sep">Hoje</div>` : null}
-        ${this.chatHistory.map((m) => html`
-          <div class="msg ${m.role === 'user' ? 'user' : 'assistant'}">
-            <div class="bubble">
-              ${m.kind === 'text' && m.text ? html`<div>${m.text}</div>` : null}
-              ${m.kind === 'audio' ? html`<div class="chips"><span class="chip">🎙️ Áudio enviado</span></div>` : null}
-              ${m.kind === 'media' ? html`
-                ${m.images?.length ? html`
-                  <div class="thumbs">
-                    ${m.images.map((src) => html`<div class="thumb"><img src=${src} alt="imagem enviada" /></div>`)}
-                  </div>` : null}
-                ${m.audios?.length ? html`
-                  <div class="chips">
-                    ${m.audios.map((name) => html`<span class="chip">🎵 ${name}</span>`)}
-                  </div>` : null}
-              ` : null}
-              <div class="ts">${this.fmtTime(m.ts)}</div>
-            </div>
-          </div>
-        `)}
-      </div>
+      <div>
+        ${this.displayedLinks.length
+          ? html`
+              <div class="links-box">
+                <h3>Links úteis</h3>
+                ${this.displayedLinks.map(
+                  (l) => html`<a href=${l} target="_blank" rel="noreferrer">${this.getLinkName(l)}</a>`
+                )}
+              </div>
+            `
+          : null}
 
-      <!-- Overlay máquina de escrever -->
-      <div class="overlay" aria-hidden="true">
-        ${this.overlayLines().map((line) => html`<div class="overlay-line">${line}</div>`)}
-      </div>
+        <div class="controls">
+          <button id="resetButton" @click=${this.reset} ?disabled=${this.isRecording} title="Reset">
+            🔄
+          </button>
 
-      ${this.displayedLinks.length ? html`
-        <div class="links-box">
-          <h3>Links úteis</h3>
-          <div class="links-list">
-            ${this.displayedLinks.map(
-              (l) => html`<a href=${l} target="_blank" rel="noreferrer">${this.getLinkName(l)}</a>`
-            )}
-          </div>
-        </div>` : null}
+          <button id="startButton" @click=${this.startRecording} ?disabled=${this.isRecording} title="Start">
+            🔴
+          </button>
 
-      ${(this.imagePreviews.length || this.audioChips.length) ? html`
-        <div class="previews">
-          ${this.imagePreviews.map((src) => html`<div class="p-thumb"><img src=${src} alt="preview" /></div>`)}
-          ${this.audioChips.map((name) => html`<div class="p-chip">🎵 ${name}</div>`)}
-        </div>` : null}
-
-      <!-- Composer (MENOR e responsivo) -->
-      <div class="composer" role="form" aria-label="Enviar mensagem e mídias">
-        <div class="textarea-wrap">
-          <textarea
-            class="input"
-            placeholder="Descreva sua demanda (Shift+Enter quebra linha)…"
-            .value=${this.textInput}
-            @input=${this.onTextInput}
-            @keydown=${this.onKeyDown}
-            rows="1"
-          ></textarea>
+          <button id="stopButton" @click=${this.stopRecording} ?disabled=${!this.isRecording} title="Stop">
+            ⏹️
+          </button>
         </div>
 
-        <label class="icon-btn" for="fileUpload" title="Enviar foto/áudio (📷/🎵)">📷</label>
-        <input
-          id="fileUpload"
-          class="hidden-input"
-          type="file"
-          accept="image/*,audio/*,.mp3,.wav,.m4a,.ogg,.webm"
-          multiple
-          @change=${this.onFileChange}
-        />
+        <div id="status">${this.error ? `Erro: ${this.error}` : this.status}</div>
 
-        <button class="send-btn" @click=${this.sendTextAndMedia} ?disabled=${this.isSending}>Enviar</button>
+        <gdm-live-audio-visuals-3d
+          .inputNode=${this.inputNode}
+          .outputNode=${this.outputNode}>
+        </gdm-live-audio-visuals-3d>
       </div>
-
-      <!-- Controles: mic LIGA/DESLIGA -->
-      <div class="controls" aria-label="Microfone">
-        <button
-          class="mic ${this.isRecording ? 'on' : ''}"
-          @click=${this.toggleMicPower}
-          title=${this.isRecording ? 'Desligar microfone' : 'Ligar microfone'}
-        >
-          ${this.isRecording ? '🎙️' : '🎙️'}
-        </button>
-      </div>
-
-      <div id="status">${this.error ? `Erro: ${this.error}` : this.status}</div>
-
-      <gdm-live-audio-visuals-3d
-        .inputNode=${this.inputNode}
-        .outputNode=${this.outputNode}>
-      </gdm-live-audio-visuals-3d>
     `;
   }
 }
